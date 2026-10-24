@@ -2140,7 +2140,7 @@ def run_task(task, history=None, session_id="default", force_step=False,
             if ok:
                 used = True
                 done_args.add(arg.strip())
-            results.append("[%s:%s] → %s" % (tag, arg, r))
+            results.append("[%s:%s] → %s" % (tag, arg, r[:TOOL_CTX_CHARS]))
         history.append({"role": "user", "content":
                         "工具结果：\n" + "\n".join(results) + "\n\n基于真实结果回答。"})
         history = _trim_history(history)
@@ -2161,7 +2161,7 @@ def run_task(task, history=None, session_id="default", force_step=False,
                 used = True
                 history.append({"role": "user", "content":
                                 "工具结果：\n[%s:%s] → %s\n\n基于真实结果回答。"
-                                % (want, arg, r)})
+                                % (want, arg, r[:TOOL_CTX_CHARS])})
                 answer = call_model(history, max_tokens=MAX_ANSWER_TOKENS).strip()
                 history.append({"role": "assistant", "content": answer})
                 done_args.add(arg.strip())
