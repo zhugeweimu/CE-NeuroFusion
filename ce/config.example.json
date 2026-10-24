@@ -1,5 +1,5 @@
 {
-  "_说明": "示例配置。复制成 config.json 再改。token 留空表示不校验（仅建议本机使用）。",
+  "_说明": "示例配置。复制成 config.json 再改。token 留空表示不校验（仅建议本机使用）。 llama_url 可填任意 OpenAI 兼容服务（本机 llama.cpp / Ollama / 局域网其它机器 / 云端带 key 的地址）；mem_write 为空即不接记忆库，填任何同形状 HTTP 接口即可，不绑定具体实现；Obsidian 相关工具只在装了 Obsidian 时生效。",
   "bind": "127.0.0.1",
   "port": 8092,
   "token": "",

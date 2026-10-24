@@ -1067,6 +1067,14 @@ def do_tool(tag, arg):
             _p, _d = arg.rsplit("@", 1)
             if _d.strip().isdigit():
                 arg2, days = _p.strip(), int(_d.strip())
+        # 用户可能写成"归拢 D:\某目录"（没有 @天数）——把尾巴上的说明去掉
+        arg2 = arg2.strip().strip("，,。")
+        if os.path.isdir(arg2):
+            pass
+        else:
+            _hit = [x for x in arg2.split() if os.path.isdir(x)]
+            if _hit:
+                arg2 = _hit[0]
         root = arg2 if os.path.isabs(arg2) else os.path.join(READ_ROOTS[0] if READ_ROOTS else ".", arg2)
         if not _inside(root):
             return "不在允许读取的目录里，拒绝。"
@@ -1094,7 +1102,32 @@ def do_tool(tag, arg):
             if n >= 200:
                 break
         if not rows:
-            return "最近 %d 天这个目录里没有文件变动。" % days
+            # 最近 N 天没变动 ≠ 目录是空的：退回全量清单（只列文件名，不读内容）
+            allrows = []
+            for dp, dirs, files in os.walk(root):
+                dirs[:] = [d for d in dirs if not d.startswith(".")]
+                for fn in files:
+                    fp = os.path.join(dp, fn)
+                    try:
+                        st = os.stat(fp)
+                    except OSError:
+                        continue
+                    allrows.append((st.st_mtime, os.path.relpath(fp, root), st.st_size))
+            if not allrows:
+                return "这个目录里确实什么都没有：%s" % arg2
+            allrows.sort(reverse=True)
+            lines = ["最近 %d 天没有文件变动；以下是为全部 %d 个文件（按修改时间倒序，最多 60 条）："
+                     % (days, len(allrows))]
+            for mt, rel, sz in allrows[:60]:
+                lines.append("- %s  %s  %d 字节" % (
+                    time.strftime("%m-%d %H:%M", time.localtime(mt)), rel, sz))
+            hits = []
+            for _mt, rel, _sz in allrows[:60]:
+                hits.append(rel)
+                hits.append(os.path.basename(rel))
+            _h = hits_get()
+            _h[:] = list(dict.fromkeys(_h + hits))
+            return "\n".join(lines)
         rows.sort(reverse=True)
         lines = ["最近 %d 天变动过的文件 %d 个（这些是唯一可以用作依据的事实）：" % (days, len(rows))]
         for mt, rel, sz in rows[:120]:
@@ -1189,8 +1222,16 @@ INTENT_RULES = [
 ]
 
 
+_DIR_WORDS = ("归拢", "清点", "目录", "文件夹", "桌面", "路径", "\\\\", ":\\")
+_LIST_WORDS = ("列一下", "列出", "有哪些", "有什么", "里有什么", "多少个", "统计")
+
+
 def need_tool(task):
     t = task or ""
+    # 「归」单独判：必须同时提到目录/路径 + 清点动作，否则"列出三条建议"会被误吞
+    if any(w in t for w in ("归拢", "清点")) or (
+            any(d in t for d in _DIR_WORDS) and any(l in t for l in _LIST_WORDS)):
+        return "归"
     for tag, words in INTENT_RULES:
         if any(w in t for w in words):
             return tag
@@ -1204,13 +1245,34 @@ def extract_arg(tag, task):
     """
     t = (task or "").strip()
     pats = {
+        "归": r"^(?:请)?(?:归拢|列一下|列出|清点)\s*[：:，,]?\s*(.+)$",
         "查": r"^(?:请)?(?:查一下|查查|搜一下|搜索一下|找一下|找找|翻一下)\s*[：:，,]\s*(.+)$",
         "读": r"^(?:请)?(?:读一下|打开这个文件|读这个文件)\s*[：:，,]\s*(.+)$",
     }
     m = re.match(pats.get(tag, r"$.^"), t)
     if not m:
-        return ""
-    arg = m.group(1).strip().strip("。！？ ")
+        if tag == "归":
+            # 口语说法也能抽："帮我看看桌面有什么文件" → "桌面"
+            arg = re.sub(r"^(?:请|帮我|帮忙|给我|看看|看一下|瞄一眼|列一下|列出|清点|归拢)\s*", "", t)
+        else:
+            return ""
+    else:
+        arg = m.group(1).strip().strip("。！？ ")
+    if tag == "归":
+        # 剥掉尾巴上的描述，只留目录
+        for tail in ("里有什么文件", "里有什么", "下有什么", "有什么文件", "有哪些文件",
+                     "里有哪些文件", "的文件", "多少个", "有多少"):
+            arg = arg.replace(tail, "")
+        # 语气词前置："清点一下记忆库目录" → "记忆库目录"
+        for head in ("一下", "一眼", "看看", "看一看", "帮我", "帮忙", "请", "给我"):
+            arg = arg.replace(head, "")
+        arg = arg.strip()
+        arg = arg.strip().strip("。！？ ，,：:")
+        # 必须像目录：带盘符/反斜杠，或含目录词
+        if not (os.path.isabs(arg) or "\\" in arg or "/" in arg or
+                any(w in arg for w in ("目录", "文件夹", "桌面", "记忆库"))):
+            return ""
+        return arg
     # 问句不是要存的内容
     if any(x in arg for x in ["？", "?", "吗", "什么", "为什么", "怎么"]):
         return ""
