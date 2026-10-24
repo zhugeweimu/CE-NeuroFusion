@@ -187,6 +187,11 @@ def obs_vaults(force=False):
                     name = "%s-%d" % (base, i)
                     i += 1
                 found[name] = path
+                try:
+                    if (info or {}).get("open"):
+                        _OBS.setdefault("open", {})[name] = True
+                except Exception:
+                    pass
     except FileNotFoundError:
         pass
     except Exception as e:
@@ -200,7 +205,7 @@ def obs_vaults(force=False):
 
 
 def obs_root(name=""):
-    """取库根。没给名字就用默认（config 指定，否则第一个）。"""
+    """取库根。优先级：指定名字 > config 默认 > 正在打开的库 > 字母序第一个。"""
     vs = obs_vaults()
     if not vs:
         return None, "没发现 Obsidian 笔记库（可先在 Obsidian 里打开一个库，或在 config 里配 obsidian_vaults）"
@@ -208,6 +213,9 @@ def obs_root(name=""):
     if n and n in vs:
         return vs[n], ""
     if not n:
+        opened = [k for k in sorted(vs) if (_OBS.get("open") or {}).get(k)]
+        if opened:
+            return vs[opened[0]], ""
         return vs[sorted(vs)[0]], ""
     return None, "没有叫「%s」的库。现有：%s" % (n, "、".join(sorted(vs)))
 
@@ -541,9 +549,16 @@ class Index:
         for root in roots:
             if not os.path.isdir(root):
                 continue
+            if len(docs) >= INDEX_MAX_FILES:
+                log("索引已达上限 %d 个文件，其余跳过（config: index_max_files）" % INDEX_MAX_FILES)
+                break
             for dirpath, dirs, files in os.walk(root):
-                dirs[:] = [d for d in dirs if not d.startswith(".")]
+                # 跳过垃圾目录（node_modules/.git/venv 等）——之前定义了却没生效
+                dirs[:] = [d for d in dirs
+                           if not d.startswith(".") and d not in INDEX_SKIP_DIRS]
                 for fn in files:
+                    if len(docs) >= INDEX_MAX_FILES:
+                        break
                     if not fn.endswith((".md", ".txt", ".json", ".py", ".log")):
                         continue
                     p = os.path.join(dirpath, fn)
@@ -2058,8 +2073,9 @@ def run_mapreduce(task, session_id, source_text=""):
             seg_out.append(got)
     part = "\n\n".join(seg_out).strip()
 
-    # 分步块也要数条数：要求"列 5 条"只给 3 条 → 重写一次，还不行就标出来
-    _need_n = expect_count(task + chr(10) + detail)
+    # 分步块数条数：只在"没拆成多块"时逐块守。
+    # 否则"列 3 条"被拆成 3 块，每块都被要求凑 3 条 → 最后可能拼成 9 条。
+    _need_n = expect_count(task + chr(10) + detail) if len(ch["steps"]) <= 1 else None
     if _need_n and count_items(part) < _need_n:
         _got = count_items(part)
         log("块「%s」条目不足：%d/%d → 要求重写" % (title[:12], _got, _need_n))

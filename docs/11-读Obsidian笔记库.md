@@ -5,7 +5,7 @@ CE 内置四个标记，直接读写 Obsidian 库。
 ## 库从哪来
 
 Obsidian 自己把用过的库登记在 `%APPDATA%\obsidian\obsidian.json`。
-CE 读这张表就知道你有哪几个库，库名取目录名，默认用"正在打开"的那个。
+CE 读这张表就知道你有哪几个库，库名取目录名，默认优先级：obsidian_default 指定 > 正在打开的库 > 字母序第一个。
 
 想换库/加库：`ce/config.json` 里
 

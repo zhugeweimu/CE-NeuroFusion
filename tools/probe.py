@@ -50,7 +50,17 @@ def probe_server(base):
     """llama-server 的上下文与并发槽数。"""
     info = {"ok": False, "n_ctx": None, "slots": None, "model": None}
     try:
-        d = _get(base + "/props")
+        try:
+            d = _get(base + "/props")
+        except Exception as e:
+            # 不是 llama.cpp（Ollama / LM Studio / vLLM）就没有 /props，
+            # 退回通用接口：至少把真实模型名和可服务性测出来。
+            log("没有 /props（%r），改用 /v1/models 探测" % (e,))
+            models = _get(base + "/v1/models")
+            ids = [m.get("id") for m in (models.get("data") or []) if isinstance(m, dict)]
+            return {"ok": True, "model": (ids[0] if ids else MODEL), "models": ids,
+                    "slots": None, "n_ctx": None,
+                    "note": "非 llama.cpp：拿不到 n_ctx/slots，请按 conservative 档手填 source_chars"}
         info["ok"] = True
         info["n_ctx"] = (d.get("default_generation_settings") or {}).get("n_ctx")
         info["slots"] = d.get("total_slots")
