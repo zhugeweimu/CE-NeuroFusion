@@ -1,17 +1,22 @@
 """
 CE · 工具版（给本地模型用）
 
-**禁止一切可能的演绎，它只需要扮演好工具**
-给任务，干活，回来。
+**没有设定。没有自我。没有判断通道。没有日记。**
+它只是一颗子弹：给任务，干活，回来。
 
 **不碰记忆。** 记忆是独立系统的职责，本地模型只负责干活。
 
-保留的只有三件与「干活」直接相关的事：
+保留的只有三件与「干活」直接相关的事（都是从【未】的 ce.py 里挑出来的）：
   1. 内联工具标记 [查:][读:] —— 模型说要查，代码真的去查，结果回灌
   2. claims_action 监控 —— 声称做过却没调工具，驳回重答（防编造）
   3. 思维链拆解 —— 多步任务先拆步骤，跨轮推进
 
-
+刻意砍掉的：
+  - 任何记忆写入/读取（记忆归独立外部系统，CE 不掺和）
+  - 我.md / 启动.md 注入
+  - [判断] 通道 + 算子归一化 + 二阶元认知
+  - 日记、信箱、拒绝.md
+  - 客服腔裁剪（那是语气，不是任务）
 
 调用方：任何需要"可靠本地执行"的程序（HTTP 调用，语言不限）。
 """
@@ -1386,6 +1391,35 @@ def _save_chain(d):
         log("链状态存不下: %r" % (e,))
 
 
+def _trim_history(history, budget=None):
+    """按**字数**裁对话历史，而不是按条数。
+
+    为什么不能只按条数：一条工具结果可能 1500 字，30 条就是 4.5 万字，
+    远超单请求能容纳的量 —— 那还是会爆上下文，只是爆得更晚。
+    做法：保留 system，再从最近往前装，装不下就停（旧的整条丢弃）。
+    """
+    budget = int(budget or max(2000, SOURCE_CHARS))
+    if not history:
+        return history
+    head = []
+    rest = list(history)
+    if rest and rest[0].get("role") == "system":
+        head = [rest.pop(0)]
+    used, keep = 0, []
+    for m in reversed(rest):
+        c = len(m.get("content") or "")
+        if keep and used + c > budget:
+            break
+        used += c
+        keep.append(m)
+    keep.reverse()
+    out = head + keep
+    if len(out) < len(history):
+        log("历史裁剪：%d 条 → %d 条（预算 %d 字，实际 %d 字）"
+            % (len(history), len(out), budget, used))
+    return out
+
+
 def _lean_step(task, step, notes, tool_ctx="", extra=""):
     """单步上下文：任务一句话 + 之前各步的摘要（截断） + 本步 + 工具结果。
     绝不把完整历史塞进来 —— 小模型的上下文就是这么撑爆的。"""
@@ -2065,8 +2099,7 @@ def run_task(task, history=None, session_id="default", force_step=False,
     else:
         history.append({"role": "user", "content": task})
 
-    if len(history) > 30:
-        history = [history[0]] + history[-29:]
+    history = _trim_history(history)
 
     answer = call_model(history, max_tokens=MAX_ANSWER_TOKENS)
     history.append({"role": "assistant", "content": answer})
@@ -2088,6 +2121,7 @@ def run_task(task, history=None, session_id="default", force_step=False,
             results.append("[%s:%s] → %s" % (tag, arg, r))
         history.append({"role": "user", "content":
                         "工具结果：\n" + "\n".join(results) + "\n\n基于真实结果回答。"})
+        history = _trim_history(history)
         answer = call_model(history, max_tokens=MAX_ANSWER_TOKENS)
         history.append({"role": "assistant", "content": answer})
         tools = TOOL_RE.findall(answer)
