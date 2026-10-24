@@ -15,7 +15,6 @@
 |---|---|---|---|
 | **llama.cpp** | ggml-org<br>`github.com/ggml-org/llama.cpp` | MIT | 本地推理服务，OpenAI 兼容接口，默认 `:8080` |
 | **bge-small-zh-v1.5** | 北京智源人工智能研究院 (BAAI) | MIT | 中文嵌入模型；装了才启用语义检索 `:8081` |
-| **AstrBot** | AstrBotDevs<br>`github.com/AstrBotDevs/AstrBot` | AGPL-3.0 | `astrbot_plugins/` 下的对接件跑在它里面 |
 | **Obsidian** | Obsidian.md | 商业软件（个人使用免费） | `[搜笔:][读笔:][日:]` 标记读写其笔记库 |
 
 ## 说明

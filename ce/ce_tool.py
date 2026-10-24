@@ -18,7 +18,7 @@ CE · 工具版（给本地模型用）
   - 日记、信箱、拒绝.md
   - 客服腔裁剪（那是语气，不是任务）
 
-调用方：AstrBot 的 computer 子代理 / 任何需要"可靠本地执行"的地方。
+调用方：任何需要"可靠本地执行"的程序（HTTP 调用，语言不限）。
 """
 try:
     from http.server import ThreadingHTTPServer as _Server, BaseHTTPRequestHandler
@@ -82,6 +82,8 @@ MAX_ANSWER_TOKENS = int(CFG.get("max_answer_tokens", 1200))
 DISABLE_THINKING = bool(CFG.get("disable_thinking", True))
 # repeat_penalty 是 llama.cpp 扩展；设 0 表示不发（对别的服务更友好）
 REPEAT_PENALTY = float(CFG.get("repeat_penalty", 1.1) or 0)
+# 失败重试次数。云端按 token 计费时，失败请求也可能计费 —— 想省钱就设 0
+RETRY_TIMES = int(CFG.get("retry_times", 1))
 # 分步模式：拆解后一步一提交，步与步之间只传摘要，不把历史全塞进上下文
 STEP_MODE = bool(CFG.get("step_mode", True))
 # 分步的"形状"：
@@ -173,7 +175,7 @@ def obs_root(name=""):
 
 
 def obs_safe(rel, root):
-    """库内相对路径 → 绝对路径。越界一律拒（和插件同一套规矩）。"""
+    """库内相对路径 → 绝对路径。越界一律拒（和写入入口同一套规矩）。"""
     raw0 = (rel or "").strip().replace("\\", "/")
     if not raw0:
         return None, "路径是空的。"
@@ -278,6 +280,40 @@ except Exception:
 
 
 
+_USAGE = threading.local()
+_USAGE_TOTAL = {"calls": 0, "prompt": 0, "completion": 0, "failed": 0}
+
+
+def _usage_add(usage):
+    """记账：每次调用把 usage 累加。云端对账时这组数字能直接跟账单比。"""
+    if not isinstance(usage, dict):
+        return
+    pt = int(usage.get("prompt_tokens") or 0)
+    ct = int(usage.get("completion_tokens") or 0)
+    if not hasattr(_USAGE, "calls"):
+        _USAGE.calls = _USAGE.prompt = _USAGE.completion = _USAGE.failed = 0
+    _USAGE.calls += 1
+    _USAGE.prompt += pt
+    _USAGE.completion += ct
+    _USAGE_TOTAL["calls"] += 1
+    _USAGE_TOTAL["prompt"] += pt
+    _USAGE_TOTAL["completion"] += ct
+    log("用量 +%d/%d tokens（累计 %d 次 / in %d / out %d）"
+        % (pt, ct, _USAGE.calls, _USAGE.prompt, _USAGE.completion))
+
+
+def usage_now():
+    """本次请求的用量（线程内）。"""
+    return {"calls": getattr(_USAGE, "calls", 0),
+            "prompt_tokens": getattr(_USAGE, "prompt", 0),
+            "completion_tokens": getattr(_USAGE, "completion", 0),
+            "failed": getattr(_USAGE, "failed", 0)}
+
+
+def usage_total():
+    return dict(_USAGE_TOTAL)
+
+
 def friendly_err(e, where=""):
     """把底层异常翻译成"下一步该干什么"。这比 traceback 对新用户有用得多。"""
     s = repr(e)
@@ -368,6 +404,7 @@ _BUDGET = threading.local()
 def _budget_new():
     _BUDGET.t0 = time.time()
     _BUDGET.calls = 0
+    _USAGE.calls = _USAGE.prompt = _USAGE.completion = _USAGE.failed = 0
 
 
 def _budget_check(what="模型"):
@@ -407,11 +444,14 @@ def call_model(messages, max_tokens=400):
 
     _budget_check()
     last = None
-    for attempt in range(3):
+    for attempt in range(RETRY_TIMES + 1):
         try:
-            return _post(LLAMA, body, timeout=300)["choices"][0]["message"]["content"] or ""
+            resp = _post(LLAMA, body, timeout=300)
+            _usage_add(resp.get("usage") or {})
+            return resp["choices"][0]["message"]["content"] or ""
         except Exception as e:
             last = e
+            _USAGE_TOTAL["failed"] = _USAGE_TOTAL.get("failed", 0) + 1
             msg = str(e)
             # 服务端不认扩展字段（400/422/未知参数）→ 去掉可选字段重试
             if optional and ("400" in msg or "422" in msg or "unknown" in msg.lower()
@@ -2160,6 +2200,9 @@ class Handler(BaseHTTPRequestHandler):
                                         "file": _log_file(sid), "lines": lines})
             except FileNotFoundError:
                 return self._send(404, {"ok": False, "error": "这个 session 还没有日志"})
+        if self.path.startswith("/usage"):
+            return self._send(200, {"ok": True, "total": usage_total(),
+                                    "note": "进程启动以来的累计；重启归零。云端对账时可与账单比对"})
         if self.path.startswith("/last"):
             import urllib.parse as _up
             qs = _up.parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
@@ -2263,6 +2306,7 @@ class Handler(BaseHTTPRequestHandler):
 
             self._send(200, {"ok": True, "answer": ans, "saved": saved,
                              "progress": step_info(),
+                             "usage": usage_now(),
                              "auto": bool(auto_used),
                              "elapsed": round(time.time() - t0, 2)})
         except Exception as e:
