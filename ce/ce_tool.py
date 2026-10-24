@@ -770,6 +770,10 @@ def memory_search(q, top_k=5):
         log("外部库检索失败: %r" % (e,))
         return []
 
+# 全局索引实例（/health 与 [查:] 都要用；之前误删过，这里补上）
+INDEX = Index()
+
+
 def rebuild():
     """重建索引：先探测检索档位，再按档位建关键词/语义索引。"""
     global TIER
