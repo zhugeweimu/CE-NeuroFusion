@@ -923,7 +923,29 @@ def dir_map(limit_dirs=12, per_dir=3):
     return "\n".join(lines) if lines else "（没有可列出的目录）"
 
 
+_WIDE_MAP = str.maketrans({
+    "：": ":", "＼": "\\", "／": "/", "　": " ", "，": ",", "。": ".",
+    "；": ";", "（": "(", "）": ")", "＂": '"', "‘": "'", "’": "'",
+    "＜": "<", "＞": ">", "｜": "|", "＊": "*", "？": "?", "！": "!",
+})
+
+
+def _wide_fix(s, tag=""):
+    """全角符号 → 半角。模型经常打出全角冒号，路径就废了。
+
+    只对路径类参数（读/归/记/读笔/搜笔）做，避免污染检索关键词。
+    """
+    s = s or ""
+    if tag not in ("读", "归", "记", "读笔", "搜笔"):
+        return s
+    fixed = s.translate(_WIDE_MAP)
+    if fixed != s:
+        log("全角已纠正：%s → %s" % (s[:40], fixed[:40]))
+    return fixed
+
+
 def do_tool(tag, arg):
+    arg = _wide_fix(arg, tag)
     """执行一个内联工具标记：读/查/记/归。返回给模型看的文本。"""
     arg = (arg or "").strip()
     if arg in _PLACEHOLDER or len(arg) < 2:
@@ -1224,6 +1246,169 @@ INTENT_RULES = [
 
 _DIR_WORDS = ("归拢", "清点", "目录", "文件夹", "桌面", "路径", "\\\\", ":\\")
 _LIST_WORDS = ("列一下", "列出", "有哪些", "有什么", "里有什么", "多少个", "统计")
+
+
+ITER_STATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".ce_iterate.json")
+ITER_EXTS = (".md", ".txt", ".json", ".py", ".log", ".csv")
+
+
+def _iter_state():
+    try:
+        with io.open(ITER_STATE, encoding="utf-8") as f:
+            d = json.load(f) or {}
+        d.setdefault("since", 0.0)
+        d.setdefault("runs", [])
+        return d
+    except Exception:
+        return {"since": 0.0, "runs": []}
+
+
+def _iter_save(d):
+    try:
+        tmp = ITER_STATE + ".tmp"
+        with io.open(tmp, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False, indent=1)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, ITER_STATE)
+        return True
+    except Exception as e:
+        log("迭代状态写不了: %r" % (e,))
+        return False
+
+
+def iter_scan_new(since, limit=400):
+    """扫 read_roots 下比 since 新的文件（按 mtime 升序）。"""
+    rows = []
+    for root in (READ_ROOTS or []):
+        if not os.path.isdir(root):
+            continue
+        for dp, dirs, files in os.walk(root):
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in INDEX_SKIP_DIRS]
+            for fn in files:
+                if fn.startswith("."):            # 隐藏文件不扫（含 .ce_iterate/.ce_index）
+                    continue
+                if not fn.lower().endswith(ITER_EXTS):
+                    continue
+                fp = os.path.join(dp, fn)
+                if os.path.abspath(fp) == os.path.abspath(ITER_STATE):
+                    continue
+                try:
+                    st = os.stat(fp)
+                except OSError:
+                    continue
+                if st.st_mtime <= since or st.st_size <= 0:
+                    continue
+                rows.append((st.st_mtime, fp, st.st_size))
+    rows.sort()
+    return rows[:limit]
+
+
+def iter_batches(rows, budget):
+    """把新文件按预算切批；单个文件超预算就截断（会注明）。"""
+    batches, cur, used = [], [], 0
+    for mt, fp, sz in rows:
+        try:
+            with io.open(fp, "r", encoding="utf-8", errors="replace") as f:
+                txt = f.read()
+        except Exception:
+            continue
+        rel = os.path.relpath(fp, READ_ROOTS[0]) if READ_ROOTS else os.path.basename(fp)
+        piece = "\n\n### %s（%s）\n%s" % (rel, time.strftime("%m-%d %H:%M", time.localtime(mt)), txt)
+        if len(piece) > budget:
+            piece = piece[:budget] + "\n（超预算，已截断）"
+        if cur and used + len(piece) > budget:
+            batches.append(cur)
+            cur, used = [], 0
+        cur.append((fp, piece))
+        used += len(piece)
+    if cur:
+        batches.append(cur)
+    return batches
+
+
+def run_iterate(task, session_id="default", since=None, max_rounds=3, save_to=""):
+    """增量迭代：扫新文件 → 分批整理 → 边整理边再扫新到的 → 汇总。
+
+    返回 dict：{answer, files, batches, since, rounds}
+    """
+    _budget_new()
+    hits_get().clear()
+    st = _iter_state()
+    if since:
+        since_ts = float(since)
+    else:
+        since_ts = float(st.get("since") or 0) or (time.time() - 7 * 86400)   # 首次：近 7 天
+    log("迭代开始：since=%s，任务=%s" % (
+        time.strftime("%m-%d %H:%M", time.localtime(since_ts)), task[:40]))
+
+    outs = []
+    done_files, rounds = [], 0
+    used_batches = 0
+    while rounds < max(1, int(max_rounds)):
+        rounds += 1
+        rows = iter_scan_new(since_ts)
+        if not rows:
+            log("迭代：没有新文件了（第 %d 轮）" % rounds)
+            break
+        batches = iter_batches(rows, max(1500, SOURCE_CHARS - 800))
+        log("迭代第 %d 轮：新文件 %d 个 → %d 批" % (rounds, len(rows), len(batches)))
+        for bi, batch in enumerate(batches):
+            used_batches += 1
+            material = "".join(p for _fp, p in batch)
+            msgs = [
+                {"role": "system", "content": system_prompt()},
+                {"role": "user", "content": (
+                    "要做的整理：%s\n\n下面是新到的材料（第 %d 批，共 %d 个文件）：\n%s"
+                    % (task, bi + 1, len(batch), material))},
+            ]
+            got = (call_model(msgs, max_tokens=MAX_ANSWER_TOKENS) or "").strip()
+            if got:
+                outs.append("## 第 %d 轮 / 第 %d 批（%d 个文件）\n%s"
+                            % (rounds, bi + 1, len(batch), got))
+            for mt, fp, _sz in [(r[0], r[1], r[2]) for r in rows if r[1] in [b[0] for b in batch]]:
+                done_files.append(fp)
+                since_ts = max(since_ts, mt)
+            _save_ckpt(session_id, used_batches, {"iterate": True, "batch": bi + 1,
+                                                  "files": [b[0] for b in batch], "out": got})
+            _runlog(session_id, "迭代 第%d轮 第%d批：%d 文件 → %d 字"
+                    % (rounds, bi + 1, len(batch), len(got)))
+        # 这一轮做完再扫，看有没有整理期间新掉进来的文件（继续下一轮）
+        nxt = iter_scan_new(since_ts)
+        if not nxt:
+            break
+        if rounds >= max_rounds:
+            log("迭代到达轮数上限 %d，剩下的下次继续" % max_rounds)
+            break
+
+    answer = "\n\n".join(outs).strip() or "（这段时间没有新文件）"
+    answer = _clean_final(answer, answer)
+    _save_last(session_id, answer)
+    st["since"] = since_ts
+    st["runs"] = (st.get("runs") or [])[-20:] + [{
+        "t": time.strftime("%Y-%m-%d %H:%M:%S"), "task": task[:80],
+        "files": len(done_files), "batches": used_batches, "rounds": rounds}]
+    _iter_save(st)
+    if save_to:
+        try:
+            ap = os.path.abspath(save_to)
+            if any(ap.startswith(os.path.abspath(r) + os.sep) for r in (WRITE_ROOTS or [])):
+                with io.open(ap, "w", encoding="utf-8") as f:
+                    f.write(answer)
+                log("迭代结果已写 %s" % ap)
+            else:
+                log("save_to 不在 write_roots，拒绝写入: %s" % save_to)
+        except Exception as e:
+            log("迭代结果写入失败: %r" % (e,))
+    return {"answer": answer, "files": done_files, "batches": used_batches,
+            "rounds": rounds, "since": since_ts}
+
+
+def _meaningful(ans):
+    """结果去掉符号后还有没有实际内容。防"三个空条目"当成品交出去。"""
+    s = ans or ""
+    s = re.sub(r"[\s\-*#>`_~·•…]+", "", s)
+    return len(s) >= 8
 
 
 def need_tool(task):
@@ -2679,6 +2864,13 @@ class Handler(BaseHTTPRequestHandler):
                 task = task + "\n（说明：结果会由系统自动保存到 %s，你不用自己写文件，也不要说已写入。）" % _st
             if not task:
                 return self._send(400, {"error": "task required"})
+            if d.get("iterate"):
+                r = run_iterate(task, d.get("session_id") or "default",
+                                since=d.get("since"), max_rounds=int(d.get("max_rounds") or 3),
+                                save_to=(d.get("save_to") or "").strip())
+                return self._send(200, {"ok": True, "answer": r["answer"],
+                                        "files": len(r["files"]), "batches": r["batches"],
+                                        "rounds": r["rounds"], "since": r["since"]})
             t0 = time.time()
             auto_used = bool(d.get("auto"))
             wish_hint = _wish_hint(d.get("task") or "")
@@ -2700,6 +2892,18 @@ class Handler(BaseHTTPRequestHandler):
             ans, _ = run_task(task, d.get("history"), d.get("session_id") or "default",
                               force_step=bool(d.get("stepwise")), source_text=src_text,
                               auto=bool(d.get("auto")))
+
+            # 空产出拦截：去掉符号后没有实际内容，就不当成成品交出去
+            try:
+                _p0 = step_info()
+                _is_prog = _p0 is not None and not _p0.get("done")
+                if ans and not _is_prog and not _meaningful(ans):
+                    log("空产出拦截：原结果 %d 字，无实际内容" % len(ans))
+                    ans = ("（没有可交付的内容）模型只给出了符号或空条目，没有实际内容。"
+                           "可能原因：目标文件不存在、检索无命中、或文件为空。"
+                           "原始输出 %d 字已丢弃，可看 /logs 复核。" % len(ans))
+            except Exception:
+                pass
 
             saved = ""
             want = (d.get("save_to") or "").strip()
