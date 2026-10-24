@@ -84,6 +84,8 @@ DISABLE_THINKING = bool(CFG.get("disable_thinking", True))
 REPEAT_PENALTY = float(CFG.get("repeat_penalty", 1.1) or 0)
 # 失败重试次数。云端按 token 计费时，失败请求也可能计费 —— 想省钱就设 0
 RETRY_TIMES = int(CFG.get("retry_times", 1))
+# 单条工具结果进上下文的上限（字）。太大 = 白烧上下文；太小 = 模型看不清。
+TOOL_CTX_CHARS = int(CFG.get("tool_ctx_chars", 1200))
 # 分步模式：拆解后一步一提交，步与步之间只传摘要，不把历史全塞进上下文
 STEP_MODE = bool(CFG.get("step_mode", True))
 # 分步的"形状"：
@@ -377,8 +379,17 @@ SYSTEM = """你是任务执行器。只做被要求的事。
 当前时间："""
 
 
-def system_prompt():
-    """系统提示 + 当前时间。每次调用都重算，避免跨天时间错。"""
+def system_prompt(lean=False):
+    """系统提示 + 当前时间。每次调用都重算，避免跨天时间错。
+
+    lean=True：只给角色与输出纪律，不给工具清单。
+    分步模式的每一块只负责把这一段写出来，不调工具，
+    把 615 字的工具手册重复发 12 遍纯属浪费上下文。
+    """
+    if lean:
+        return ("你是任务执行器。只做被要求的那一块，直接写成品内容。\n"
+                "不解释自己在做什么，不写「以下是」，不输出工具标记。\n"
+                "当前时间：" + time.strftime("%Y-%m-%d %H:%M"))
     return SYSTEM + time.strftime("%Y-%m-%d %H:%M")
 
 
@@ -1430,7 +1441,7 @@ def _lean_step(task, step, notes, tool_ctx="", extra=""):
     add = ("补充要求（用户后加的，必须遵守）：\n" + extra.strip() + "\n\n") if (extra or "").strip() else ""
     msg = "总任务：%s\n\n%s%s当前步骤：%s" % (task, prev, add, step)
     if tool_ctx:
-        msg += "\n\n本步工具结果：\n" + tool_ctx[:3000]
+        msg += "\n\n本步工具结果：\n" + tool_ctx[:TOOL_CTX_CHARS]
     return [{"role": "system", "content": system_prompt()},
             {"role": "user", "content": msg}]
 
@@ -1743,8 +1754,11 @@ def _segments(text, limit):
 
 
 def _part_prompt(task, ask_title, ask_detail, base):
-    """单个子要求的上下文：共享底座（原文/素材）+ 只这一个要求。"""
-    return [{"role": "system", "content": system_prompt()},
+    """单个子要求的上下文：共享底座（原文/素材）+ 只这一个要求。
+
+    system 用 lean：这一块只写成品，不带工具手册。
+    """
+    return [{"role": "system", "content": system_prompt(lean=True)},
             {"role": "user", "content":
              "总任务：%s\n\n【共享素材，只准依据这里的内容】\n%s\n\n"
              "现在只做这一块：%s\n具体要求：%s\n\n"
@@ -1817,7 +1831,7 @@ def run_mapreduce(task, session_id, source_text=""):
             plan["source_chars"], plan["segments"], plan["parallel"], plan["note"]))
     # 段预算必须扣掉固定开销：system 提示 + 总任务 + 本块要求 + 余量。
     # 否则"上限 1800"时实际发出去 2500 字，预算形同虚设。
-    _fixed = len(system_prompt()) + len(task) + len(title) + len(detail) + 400
+    _fixed = len(system_prompt(lean=True)) + len(task) + len(title) + len(detail) + 400
     _seg_budget = max(600, SOURCE_CHARS - _fixed)
     segs = _segments(base, _seg_budget)
     if len(segs) > 1:
@@ -1869,7 +1883,7 @@ def run_mapreduce(task, session_id, source_text=""):
             joined = "\n\n".join("## %s\n\n%s" % (h, b) for h, b in zip(heads, parts))
             final = joined
             if len(joined) < 80:
-                final = call_model([{"role": "system", "content": system_prompt()},
+                final = call_model([{"role": "system", "content": system_prompt(lean=True)},
                                     {"role": "user", "content":
                                      "把下面这些块合并成一份连贯的成品。只做合并与排版，"
                                      "不许新增任何内容，不许删掉具体条目。\n\n" + joined}],
