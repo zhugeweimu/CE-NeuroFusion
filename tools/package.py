@@ -16,6 +16,12 @@ except Exception:
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIST = os.path.join(REPO, "dist")
+# 版本规则（写死的，别凭手感改）：
+#   X.Y.Z
+#   Z（最后一位）+1  = 只修 bug、只补文档、不动行为
+#   Y（第二位）+1    = 有行为变化 / 新增功能 / 配置项变更（Z 归零）
+#   X                 = 不兼容的大改（目前不动）
+# 发版前必须：bug 已修并验证过，不许边改边发。
 VER = "1.4.4"
 ROOT = "ce-%s" % VER
 
