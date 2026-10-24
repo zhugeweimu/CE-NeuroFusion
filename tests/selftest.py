@@ -1,111 +1,95 @@
 # -*- coding: utf-8 -*-
-"""CE·幕 自测：验证三个判据是否真的生效。
+"""CE 自测：不碰真实数据、不调真实模型，用桩验证核心机制。
 
-不碰真实 vault（沙盒限制），全部在临时目录里跑。
-call_model 被替换成脚本化的假模型，所以结果是确定的。
+覆盖：
+  1. 提示词两档：lean 不含工具手册
+  2. 提示里的时间只到「日」——带分钟会让 prompt 缓存每次失效
+  3. 历史按字数裁剪
+  4. 条目数抽取与计数
+  5. 未接记忆系统时 [记:] 给可操作提示
+  6. 空目录检索如实回答
 """
 import importlib.util
-import io
 import os
-import shutil
+import re
 import sys
 import tempfile
 
-sys.stdout.reconfigure(encoding="utf-8")
-REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
-CE = os.environ.get("CE_TOOL", os.path.join(REPO, "ce", "ce_tool.py"))
-spec = importlib.util.spec_from_file_location("ce_mu", CE)
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(HERE)
+CE = os.environ.get("CE_TOOL") or os.path.join(REPO, "ce", "ce_tool.py")
+
+spec = importlib.util.spec_from_file_location("ce_tool", CE)
 ce = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ce)
 
-# 把 vault 换到临时目录（沙盒只允许写工作区）
-tmp = tempfile.mkdtemp(prefix="ce_test_")
-ce.VAULT = tmp
-for d in ["日记", "信箱"]:
-    os.makedirs(os.path.join(tmp, d), exist_ok=True)
-io.open(os.path.join(tmp, "我.md"), "w", encoding="utf-8").write("# 我\n我是幕。\n")
-io.open(os.path.join(tmp, "启动.md"), "w", encoding="utf-8").write("# 启动\n先写判断。\n")
-io.open(os.path.join(tmp, "书.md"), "w", encoding="utf-8").write(
-    "锅里有一碗面，是昨天剩的。\n")
-ce.CORE = ce.load_core()
-ce.INDEX.build(tmp)
-print("测试 vault:", tmp, " 索引文件数:", len(ce.INDEX.docs))
+tmp = tempfile.mkdtemp(prefix="ce_selftest_")
+ce.CHAIN_PATH = os.path.join(tmp, "chain.json")
+ce.CKPT_DIR = os.path.join(tmp, "ck")
+ce._runlog = lambda *a, **k: None
+ce.READ_ROOTS = []
+
+ok = 0
+fail = 0
 
 
-# ==================== 假模型 ====================
-SCRIPT = []          # 每次调用依次弹出
-CALLS = []
+def check(name, cond, detail=""):
+    global ok, fail
+    if cond:
+        ok += 1
+        print("  ✓ %s" % name)
+    else:
+        fail += 1
+        print("  ✗ %s  %s" % (name, detail))
 
 
-def fake_model(messages, max_tokens=300):
-    CALLS.append(messages[-1].get("content", "")[:80])
-    return SCRIPT.pop(0) if SCRIPT else "（假模型没词了）"
+print("CE 自测（%s）" % CE)
 
+# 1. 提示词两档
+full, lean = ce.system_prompt(), ce.system_prompt(lean=True)
+check("完整提示含工具标记", "[查:" in full)
+check("lean 提示不含工具手册", "[查:" not in lean, lean[:60])
+check("lean 明显更短", len(lean) < len(full) / 3, "%d vs %d" % (len(lean), len(full)))
 
-ce.call_model = fake_model
+# 2. 时间精度
+check("提示里的时间不带分钟", not re.search(r"\d{2}:\d{2}", full), full[-24:])
 
+# 3. 历史裁剪
+hist = [{"role": "system", "content": "sys"}]
+for _ in range(30):
+    hist.append({"role": "user", "content": "x" * 1500})
+    hist.append({"role": "assistant", "content": "y" * 1500})
+before = sum(len(m["content"]) for m in hist)
+ce.SOURCE_CHARS = 3000
+trimmed = ce._trim_history(hist)
+after = sum(len(m["content"]) for m in trimmed)
+check("历史被裁到预算内", after <= ce.SOURCE_CHARS + 1600, "%d → %d" % (before, after))
+check("裁剪保留 system", trimmed[0]["role"] == "system")
+check("裁剪保留最新一条", trimmed[-1] is hist[-1])
 
-def run(user_msg, scripts, sid="t"):
-    SCRIPT[:] = list(scripts)
-    CALLS.clear()
-    ans, hist = ce.process_message(user_msg, [], sid)
-    return ans
+# 4. 条目数
+check("抽「5 条」", ce.expect_count("列出 5 条建议") == 5)
+check("抽「三种」", ce.expect_count("给我三种方案") == 3)
+check("抽「前 10」", ce.expect_count("取前 10 个") == 10)
+check("无数量词不抽", ce.expect_count("整理一下这些文件") is None)
+check("数列表条目", ce.count_items("- 甲\n- 乙\n- 丙") == 3)
+check("数编号条目", ce.count_items("1. 甲\n2. 乙") == 2)
+check("单句算 1 条", ce.count_items("就一句话") == 1)
 
+# 5. 没接记忆系统
+ce.MEM_WRITE = ""
+msg = ce.do_tool("记", "测试")
+check("[记:] 未接记忆库时给提示", "没接记忆系统" in msg, msg[:60])
 
-print("\n" + "=" * 60)
-print("判据 1：声称做过但没调工具 → 必须驳回")
-print("=" * 60)
-ans = run("帮我把这个记下来", [
-    "[判断] 我觉得他想让我记住这件事\n我已经记下来了。",     # 第一答：假称已记
-    "[判断] 我不确定他要记哪个，先问\n你要我记什么？",        # 驳回后：改成不编
-])
-print("  第一答含假称      :", "已经记下来了" in CALLS[0] or True)
-print("  驳回提示发出了吗  :", any("没有调用任何工具" in c for c in CALLS))
-print("  最终回答          :", ans.replace("\n", " / ")[:90])
+# 6. 空目录检索
+ce.rebuild()
+r = ce.do_tool("查", "随便什么")
+check("空目录检索如实回答", ("没资料" in r) or ("没查到" in r), r[:60])
 
-print("\n" + "=" * 60)
-print("判据 2：[记:…] 标记 → 真的落盘 + 进外部库")
-print("=" * 60)
-ans = run("记住：面在锅里", [
-    "[判断] 他让我记一件小事\n[记:面在锅里，昨天剩的]",
-    "记住了。",
-])
-log_path = os.path.join(tmp, "日记", ce.time.strftime("%Y-%m-%d") + ".md")
-print("  日记文件存在      :", os.path.isfile(log_path))
-if os.path.isfile(log_path):
-    print("  日记内容          :", io.open(log_path, encoding="utf-8").read().strip()[:80])
-print("  第二轮喂了工具结果:", any("工具执行结果" in c for c in CALLS))
-print("  最终回答          :", ans.replace("\n", " / ")[:90])
-
-print("\n" + "=" * 60)
-print("判据 3：[判断] 通道 → 算子归一化 + 写判断日志")
-print("=" * 60)
-ans = run("你记得我昨天说过什么吗", [
-    "[判断] 我不确定他指哪件事\n[查:昨天]\n（忘了）",
-    "[判断] 我猜他是想问面条那件事\n锅里的面还在。",
-])
-jlog = os.path.join(tmp, "日记", ".判断.log")
-print("  判断日志存在      :", os.path.isfile(jlog))
-if os.path.isfile(jlog):
-    for line in io.open(jlog, encoding="utf-8").read().strip().split("\n")[-4:]:
-        print("    ", line)
-print("  最终回答          :", ans.replace("\n", " / ")[:90])
-
-print("\n" + "=" * 60)
-print("判据 4：客服腔尾巴 → 剪掉")
-print("=" * 60)
-t = "锅里的面还在。如果你需要的话，我可以帮你热一下。祝你今天顺利。"
-print("  原文  :", t)
-print("  剪后  :", ce.trim_assistant_tail(t))
-
-print("\n" + "=" * 60)
-print("判据 5：算子归一化（自然说法也算）")
-print("=" * 60)
-for s in ["我觉得他在试探我", "我担心我这句话会让他觉得敷衍",
-          "不确定他是不是那个意思", "认为: 他在绕", "随便一句没算子的话"]:
-    op, prop = ce.split_judge(s)
-    print("  %-28s → (%s, %s)" % (s, op, prop))
-
-shutil.rmtree(tmp, ignore_errors=True)
-print("\n临时目录已清理")
+print("\n结果：%d 通过 / %d 失败" % (ok, fail))
+sys.exit(0 if fail == 0 else 1)

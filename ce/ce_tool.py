@@ -306,9 +306,11 @@ SEM_MIN_SCORE = float(CFG.get("semantic_min_score", 0.35))
 #   none      不检索（没有资料可查）
 #   keyword   只用文件夹 + 关键词（零依赖，谁都能跑）
 #   semantic  文件夹 + 本地嵌入（有嵌入服务时更好）
-#   memory    额外挂一个外部外部库的检索口（HTTP GET ?q=，返回 {"items":[{"text":...}]}）
+#   memory    额外挂一个外部库的检索口（HTTP GET ?q=，返回 {"items":[{"text":...}]}）
 RETRIEVAL = CFG.get("retrieval", "auto").lower()
 MEM_SEARCH = CFG.get("memory_search_url", "")
+# 从记忆库一次取多少候选（取少了就只能看到最新的那几条）
+MEM_LIMIT = int(CFG.get("mem_limit", 200))
 IDX_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".ce_index.json")
 
 try:
@@ -425,8 +427,9 @@ def system_prompt(lean=False):
     if lean:
         return ("你是任务执行器。只做被要求的那一块，直接写成品内容。\n"
                 "不解释自己在做什么，不写「以下是」，不输出工具标记。\n"
-                "当前时间：" + time.strftime("%Y-%m-%d %H:%M"))
-    return SYSTEM + time.strftime("%Y-%m-%d %H:%M")
+                "当前时间：" + time.strftime("%Y-%m-%d"))
+    # 只到"日"：带分钟会让每次请求前缀都不同，本地模型的 prompt 缓存会全部失效
+    return SYSTEM + time.strftime("%Y-%m-%d")
 
 
 # ==================== HTTP ====================
@@ -727,31 +730,45 @@ TIER = "none"
 
 
 def memory_search(q, top_k=5):
-    """外部外部库检索（可选）。它没有这个口就返回空。"""
+    """外部库检索（可选）。它没有这个口就返回空。
+
+    很多记忆服务的列表接口会忽略 q、只按时间给最新 N 条。
+    所以这里多要候选（MEM_LIMIT），再在本地按词重合排序 ——
+    "只记得今天"就是这么来的：取 5 条，永远是最新的 5 条。
+    """
     if not MEM_SEARCH:
         return []
     try:
         import urllib.parse
         url = MEM_SEARCH + ("&" if "?" in MEM_SEARCH else "?") + urllib.parse.urlencode(
-            {"q": q, "limit": top_k})
+            {"q": q, "limit": MEM_LIMIT})
         d = _get(url, timeout=20)
+        cand = d.get("items") or []
+        qtok = [x for x in re.split(r"[\s，。；、,.;:?!（）()]+", q or "") if len(x) >= 2]
+
+        def _score(it):
+            if not isinstance(it, dict):
+                return 0
+            s = (it.get("text") or it.get("content") or it.get("title") or "")
+            return sum(1 for x in qtok if x in s)
+
+        try:
+            cand = sorted(cand, key=_score, reverse=True)
+        except Exception:
+            pass
         out = []
-        for it in (d.get("items") or [])[:top_k]:
+        for it in cand[:top_k]:
             if isinstance(it, dict):
-                t = it.get("text") or it.get("content") or it.get("title") or ""
+                txt = it.get("text") or it.get("content") or it.get("title") or ""
                 src = it.get("source") or it.get("id") or "外部库"
             else:
-                t, src = str(it), "外部库"
-            if t:
-                out.append((str(src)[:40], str(t)[:280]))
+                txt, src = str(it), "外部库"
+            if txt:
+                out.append((str(src)[:40], str(txt)[:280]))
         return out
     except Exception as e:
         log("外部库检索失败: %r" % (e,))
         return []
-
-
-INDEX = Index()
-
 
 def rebuild():
     """重建索引：先探测检索档位，再按档位建关键词/语义索引。"""
@@ -761,7 +778,7 @@ def rebuild():
         log("检索档位: none —— 没有可查的资料，[查:] 会直接说没资料")
         return 0
     if TIER == "memory":
-        log("检索档位: memory —— 只挂外部外部库")
+        log("检索档位: memory —— 只挂外部库")
         return 0
     n = INDEX.build(READ_ROOTS)
     log("索引: %d 个文件" % n)

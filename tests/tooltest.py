@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """CE·工具版 实机测试：确认它是个工具，不是个人。"""
 import importlib.util
+import os
 import sys
 import time
 

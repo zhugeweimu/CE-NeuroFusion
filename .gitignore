@@ -110,3 +110,7 @@ astrbot_plugins/
 tests/test_plugins.py
 tests/test_obsidian.py
 tests/test_obs.py
+
+tests/livetest.py
+tests/abtest.py
+tests/agenttest.py
