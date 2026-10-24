@@ -16,7 +16,7 @@ except Exception:
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIST = os.path.join(REPO, "dist")
-VER = "1.2.0"
+VER = "1.3.0"
 ROOT = "ce-%s" % VER
 
 # 私有痕迹检测词：base64 编码后存，避免这份检测器自己成为明文清单

@@ -70,6 +70,37 @@ READ_ROOTS = [
 # 白名单可被 config.json 覆盖（开源时用这个，别改代码）
 READ_ROOTS = CFG.get("read_roots", READ_ROOTS)
 
+
+def _auto_roots():
+    """没人配置 read_roots 时，自己去找最常见的几个地方。
+
+    为什么：让用户"把自己文件放哪"写进配置，是最容易被放弃的一步。
+    找不到就跳过，绝不报错。
+    """
+    home = os.path.expanduser("~")
+    cands = [
+        os.path.join(home, "Desktop"),
+        os.path.join(home, "Documents"),
+        os.path.join(home, "Downloads"),
+        os.path.join(home, "OneDrive", "Documents"),
+        os.path.join(home, "Documents", "Obsidian"),
+        os.getcwd(),
+    ]
+    out = []
+    for c in cands:
+        try:
+            if os.path.isdir(c) and c not in out:
+                out.append(c)
+        except Exception:
+            pass
+    return out
+
+
+if CFG.get("auto_roots", True) and not (CFG.get("read_roots") or []):
+    _auto = _auto_roots()
+    if _auto:
+        READ_ROOTS = _auto
+
 # 只写不读：写入接口给你，检索/查找不归你管（那是外部系统的事）
 MEM_WRITE = CFG.get("mem_write", "http://127.0.0.1:8001/外部检索口/api/memories")
 MEM_FOLDER = "幕"
@@ -620,6 +651,12 @@ class Index:
                     if na and nb:
                         s /= (na * nb)
                     if s >= SEM_MIN_SCORE:
+                        # 文件名命中的加成：问「日报」时「日报.md」必须排前面，
+                        # 否则会被"正文提了一嘴"的大文件挤下去（语义分不看文件名）。
+                        _flat = os.path.basename(c["p"]).lower().replace(" ", "")
+                        _qs = [x for x in re.split(r"\s+", q or "") if x]
+                        if any(x in _flat for x in _qs):
+                            s = s + 0.28
                         scored.append((s, c))
                 scored.sort(key=lambda x: -x[0])
                 if scored:
@@ -643,6 +680,18 @@ class Index:
             idf = math.log(1 + len(docs) / (1 + len(ids)))
             for i in ids:
                 score[i] = score.get(i, 0.0) + idf
+        # 文件名/路径命中的加权：用户问"日报"时，叫「日报.md」的文件必须排前面，
+        # 否则会被正文里提了一嘴"日报"的大文件挤下去。
+        for i in list(score.keys()):
+            try:
+                name = docs[i].get("p") or docs[i].get("name") or ""
+            except Exception:
+                continue
+            flat = name.lower().replace(" ", "").replace("_", "").replace("-", "")
+            for tk in toks:
+                if tk and tk in flat:
+                    score[i] = score[i] * 2.5
+                    break
         out = []
         for i, _s in sorted(score.items(), key=lambda x: -x[1])[:top_k]:
             d = docs[i]
@@ -715,7 +764,7 @@ def rebuild():
 
 
 # ==================== 工具 ====================
-TOOL_RE = re.compile(r"\[(查|读|记|归|搜笔|读笔|日)[:：]([^\]]+)\]")
+TOOL_RE = re.compile(r"\[(查|读|记|归|搜笔|读笔|日|地图)[:：]?([^\]]*)\]")
 _PLACEHOLDER = {"内容", "xxx", "…", "...", "略", "无", "空", "占位"}
 
 # 本轮真正命中的文件名（接地守卫用）
@@ -794,6 +843,45 @@ def _repeat_guard(tag, arg):
     return None
 
 
+def dir_map(limit_dirs=12, per_dir=3):
+    """代码生成的目录地图：不经过模型，直接列出"这里有什么"。
+
+    为什么需要它：用户说"整理一下"，模型不知道有什么可整理，只能猜文件名。
+    先给它一张地图，它就有据可依，也不用背完整文件名。
+    """
+    lines = []
+    for root in (READ_ROOTS or [])[:limit_dirs]:
+        try:
+            entries = [e for e in os.listdir(root) if not e.startswith(".")]
+        except Exception:
+            continue
+        files, dirs = [], []
+        for e in entries:
+            full = os.path.join(root, e)
+            (dirs if os.path.isdir(full) else files).append(e)
+        if not files and not dirs:
+            continue
+        lines.append("%s/  （%d 个文件，%d 个子目录）" % (root, len(files), len(dirs)))
+        for d in sorted(dirs)[:per_dir]:
+            try:
+                n = len(os.listdir(os.path.join(root, d)))
+            except Exception:
+                n = 0
+            lines.append("    [目录] %s/  （%d 项）" % (d, n))
+        newest = []
+        for f in files:
+            try:
+                newest.append((os.path.getmtime(os.path.join(root, f)), f))
+            except Exception:
+                pass
+        newest.sort(reverse=True)
+        for _m, f in newest[:per_dir]:
+            lines.append("    %s" % f)
+        if len(files) > per_dir:
+            lines.append("    …还有 %d 个文件" % (len(files) - per_dir))
+    return "\n".join(lines) if lines else "（没有可列出的目录）"
+
+
 def do_tool(tag, arg):
     """执行一个内联工具标记：读/查/记/归。返回给模型看的文本。"""
     arg = (arg or "").strip()
@@ -831,6 +919,11 @@ def do_tool(tag, arg):
         if os.path.isdir(p):
             return "目录:\n" + "\n".join("  - %s" % x for x in os.listdir(p)[:30])
         return "没有这个路径：%s" % arg
+
+    if tag == "地图":
+        m = dir_map()
+        log("目录地图：%d 字" % len(m))
+        return m
 
     if tag == "查":
         hits = []
@@ -1504,6 +1597,17 @@ def _prefetch(step):
     """
     outs, used = [], 0
 
+    # 0) 任务本身在问"有什么/哪些/整理/归类"时，直接把目录地图交给它。
+    #    不指望模型主动写 [地图:] —— 它连"自己不知道有哪些文件"都意识不到。
+    if re.search(r"有哪些|哪些文件|有什么|整理|归拢|归类|分类|清理|目录", step or ""):
+        try:
+            m = dir_map()
+            if m and not m.startswith("（没有"):
+                outs.append("[目录地图]\n" + m)
+                used += 1
+        except Exception:
+            pass
+
     for m in re.finditer(r"([A-Za-z]:[\\\\/][^\s，。；;\"'（）()]+)", step or ""):
         raw = m.group(1).rstrip(".，,；;：:")
         base = raw.split("@")[0]
@@ -2105,8 +2209,32 @@ def run_task(task, history=None, session_id="default", force_step=False,
             return "（第 %d/%d 步完成，还没做完。继续调用同一个 session_id 会走下一步）" % (
                 ch["i"], len(ch["steps"])), None
         return ans, None
+    _map_done = False
     if history is None:
         history = [{"role": "system", "content": system_prompt()}]
+        # 在问"有什么/整理"且没给原文时，先把目录地图放进对话。
+        # 不指望模型主动想起 [地图:] —— 它连"自己不知道"都意识不到。
+        if not (source_text or "").strip():
+            try:
+                if re.search(r"有哪些|哪些文件|有什么|整理|归拢|归类|分类|清理|目录", task or ""):
+                    _m = dir_map()
+                    if _m and not _m.startswith("（没有"):
+                        history.append({"role": "user", "content":
+                            "可用目录清单（代码扫出来的真实结果，只准依据它回答，不要编文件名）：\n" + _m})
+                        log("目录地图已入上下文：%d 字" % len(_m))
+                        _map_done = True
+                        # 地图里的文件名要登记为"命中"，否则接地守卫会把它们
+                        # 当成模型编造的文件名，把正确回答改掉（实测踩到）。
+                        _h = hits_get()
+                        for _line in _m.splitlines():
+                            _fn = _line.strip().strip("-").strip()
+                            if _fn and not _fn.startswith(("…", "[目录]", "可")):
+                                if _fn.endswith("/"):
+                                    _fn = _fn.rstrip("/").split(os.sep)[-1]
+                                if _fn and _fn not in _h:
+                                    _h.append(_fn)
+            except Exception as e:
+                log("目录地图注入失败: %r" % (e,))
 
     chain = CHAIN.get(session_id)
     if chain and chain["i"] < len(chain["steps"]):
@@ -2168,6 +2296,16 @@ def run_task(task, history=None, session_id="default", force_step=False,
             results.append("[%s:%s] → %s" % (tag, arg, r[:TOOL_CTX_CHARS]))
         history.append({"role": "user", "content":
                         "工具结果：\n" + "\n".join(results) + "\n\n基于真实结果回答。"})
+        # 任务在问"有什么/整理/归类"且没有给原文时，先把目录地图塞进去。
+        # 不指望模型自己想到去列目录 —— 它连"不知道有哪些"都意识不到。
+        if re.search(r"有哪些|哪些文件|有什么|整理|归拢|归类|分类|清理|目录", task or "") and not source_text:
+            try:
+                _m = dir_map()
+                if _m and not _m.startswith("（没有"):
+                    history.append({"role": "user", "content":
+                        "可用目录（代码列出的真实清单，只准依据它回答，不要编文件名）：\n" + _m})
+            except Exception:
+                pass
         history = _trim_history(history)
         answer = call_model(history, max_tokens=MAX_ANSWER_TOKENS)
         history.append({"role": "assistant", "content": answer})
@@ -2177,6 +2315,9 @@ def run_task(task, history=None, session_id="default", force_step=False,
     # 关键教训：模型会写 [查:内容] 这种占位词，看着像调了工具，其实什么也没做。
     # 所以这里不看它写没写标记，只看【这个意图的参数有没有被真正执行】。
     want = need_tool(task)
+    if want and _map_done and want == "查":
+        log("已有目录地图，跳过强制检索")
+        want = None
     if want:
         arg = extract_arg(want, task)
         if arg and len(arg) >= 2 and arg not in _PLACEHOLDER and arg.strip() not in done_args:
