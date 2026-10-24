@@ -16,7 +16,7 @@ except Exception:
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DIST = os.path.join(REPO, "dist")
-VER = "1.0.0"
+VER = "1.2.0"
 ROOT = "ce-%s" % VER
 
 # 私有痕迹检测词：base64 编码后存，避免这份检测器自己成为明文清单
@@ -44,6 +44,7 @@ CE_ONLY = [
     "docs/03-踩坑记录.md",
     "docs/09-使用说明与设备自检.md",
     "docs/11-读Obsidian笔记库.md",
+    "docs/12-怎么下指令.md",
 ]
 
 

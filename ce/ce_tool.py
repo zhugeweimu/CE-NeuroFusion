@@ -1625,6 +1625,31 @@ _META_CHARS = set("执行处理完成进行继续开始开展着手按照根据�
 _TAUTOLOGY_WORDS = ("执行步骤", "完成上述", "按步骤", "继续执行", "重复上述", "同上", "见上")
 
 
+def _wish_hint(task):
+    """判断任务是否像"许愿"，返回一句提示（不像就返回空串）。
+
+    为什么要有它：许愿式指令不会报错，只会安静地变差——
+    拆不开、每块空产出、成品一堆废话。用户看不出是自己没给清楚。
+    """
+    s = (task or "").strip()
+    if not s:
+        return ""
+    # 有具体对象（路径/扩展名/数字/明确动作）就不再唠叨
+    concrete = bool(re.search(r"[A-Za-z]:[\\/]|/|\\.(md|txt|py|json|docx?)", s)) \
+        or bool(re.search(r"\\d", s)) \
+        or any(v in s for v in ("列出", "统计", "分组", "分类", "提取", "改写",
+                                "比较", "归拢", "整理", "生成", "写一份", "写成"))
+    wishy = any(w in s for w in ("帮我", "随便", "看看", "优化一下", "总结一下",
+                                 "搞一下", "弄一下", "处理一下"))
+    if wishy and not concrete:
+        return ("这个任务比较像\"许愿\"：缺具体对象或交付物，可能拆不成块。"
+                "建议补上：素材（文件/目录/原文）+ 交付物（要几样、什么形式）。"
+                "见 docs/12-怎么下指令.md")
+    if len(s) < 10 and not concrete:
+        return "任务描述太短，建议写清素材与交付物（见 docs/12-怎么下指令.md）"
+    return ""
+
+
 def _is_junk_ask(text, task):
     """废话判据：空 / 只剩元词 / 就是任务原文 / 自我指涉（喊口号）。"""
     s = (text or "").strip()
@@ -2312,6 +2337,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": "task required"})
             t0 = time.time()
             auto_used = bool(d.get("auto"))
+            wish_hint = _wish_hint(d.get("task") or "")
             src_text = d.get("source") or ""
             sf = (d.get("source_file") or "").strip()
             if not src_text and sf:
@@ -2359,6 +2385,7 @@ class Handler(BaseHTTPRequestHandler):
                              "progress": step_info(),
                              "usage": usage_now(),
                              "auto": bool(auto_used),
+                             "hint": wish_hint,
                              "elapsed": round(time.time() - t0, 2)})
         except Exception as e:
             # 不把 traceback 甩给用户：给可操作的中文，细节进日志

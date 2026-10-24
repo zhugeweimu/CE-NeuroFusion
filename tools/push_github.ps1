@@ -49,8 +49,8 @@ git -c credential.helper= push -u origin main --force
 
 # 4) 传 release 包
 if (Test-Path "dist") {
-  $tag = "v1.0.0"
-  $relBody = @{ tag_name = $tag; name = "v1.0.0"; body = "CE 单包与完整包（均为 AGPL-3.0）"; draft = $false } |
+  $tag = "v1.2.0"
+  $relBody = @{ tag_name = $tag; name = "v1.2.0"; body = "CE 单包与完整包（均为 AGPL-3.0）"; draft = $false } |
              ConvertTo-Json
   try {
     $rel = Invoke-RestMethod -Method Post -Uri "https://api.github.com/repos/$Owner/$Repo/releases" `
