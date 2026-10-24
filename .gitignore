@@ -35,7 +35,6 @@ run.log
 角色卡*.md
 角色卡*.json
 *.json
-!astrbot_plugins/**/metadata.yaml
 世界书*.md
 世界书*.json
 日记/
@@ -106,3 +105,8 @@ docs/01-*.md
 # 记忆系统：等优化完再单独发布
 astrbot_plugins/memory_neo/
 bridge/
+# 插件属于另一个项目，单独发布
+astrbot_plugins/
+tests/test_plugins.py
+tests/test_obsidian.py
+tests/test_obs.py

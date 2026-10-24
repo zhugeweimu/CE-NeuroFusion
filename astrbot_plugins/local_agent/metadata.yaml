@@ -1,5 +1,0 @@
-name: astrbot_plugin_local_agent
-desc: 本地代理：把跑腿活交给本地 9B（CE :8092），不占幕幕的上下文
-version: 1.0.0
-author: mumu
-repo: ""

@@ -1,5 +1,0 @@
-name: astrbot_plugin_owner_power
-desc: 主人的最高权限：整机读写、跑命令，只认主人一个 QQ 号，别人一律拒绝
-version: 1.0.0
-author: mumu
-repo: ""

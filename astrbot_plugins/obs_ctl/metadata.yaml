@@ -1,5 +1,0 @@
-name: astrbot_plugin_obs_ctl
-desc: 连 OBS：查状态、列/切场景、录屏与直播开关（没装 OBS 就休眠，不报错）
-version: 1.0.0
-author: mumu
-repo: ""
