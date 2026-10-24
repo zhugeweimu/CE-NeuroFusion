@@ -1,0 +1,6 @@
+{
+  "_说明": "表情包：按意思挑图",
+  "ASTRBOT_DATA": "AstrBot 数据目录",
+  "STICKER_DIR": "表情包目录（默认 <data>/stickers）",
+  "EMBED_API": "嵌入服务地址"
+}

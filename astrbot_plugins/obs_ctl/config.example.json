@@ -1,0 +1,10 @@
+{
+  "_说明": "复制成 config.json 放在插件目录旁即可覆盖默认值；没有 OBS 就什么都不用改",
+  "obs_host": "127.0.0.1",
+  "obs_port": 4455,
+  "obs_password": "",
+  "allow_stream_start": false,
+  "req_timeout": 8.0,
+  "fail_window": 120,
+  "fail_limit": 3
+}

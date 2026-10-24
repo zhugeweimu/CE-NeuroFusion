@@ -1,0 +1,5 @@
+name: astrbot_plugin_self_edit
+desc: 她自己的笔记：可改、需出处、有遗忘额度（800 字）；写满须先划掉一条
+version: 1.0.0
+author: mumu
+repo: ""

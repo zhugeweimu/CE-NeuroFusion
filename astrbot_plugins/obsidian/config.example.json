@@ -1,0 +1,11 @@
+{
+  "_说明": "复制成 config.json 放插件目录旁即可覆盖；不复制就用下面的默认值",
+  "vaults": {
+    "我的笔记": "E:/Notes/我的笔记"
+  },
+  "default_vault": "我的笔记",
+  "daily_dir": "日记",
+  "max_write_chars": 2000,
+  "max_read_chars": 1500,
+  "search_limit": 8
+}

@@ -1,0 +1,5 @@
+name: astrbot_plugin_mindbeat
+desc: 潜意识心跳：本地小模型每十分钟看一眼，判断该不该主动开口；要开口时才叫醒皮层
+version: 1.0.0
+author: mumu
+repo: ""

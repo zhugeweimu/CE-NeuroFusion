@@ -1,0 +1,30 @@
+# NOTICE · 第三方组件出处
+
+本项目自身代码以仓库根 `LICENSE`（AGPL-3.0）发布。
+下面列出实际使用到的第三方，以及各自的许可。
+
+## 运行时
+
+| 组件 | 作者/仓库 | 许可 | 用途 |
+|---|---|---|---|
+| **Python 3.8+** | Python Software Foundation | PSF-2.0 | 运行 `ce/ce_tool.py`，只用标准库 |
+
+## 可选（不装也能跑）
+
+| 组件 | 作者/仓库 | 许可 | 用途 |
+|---|---|---|---|
+| **llama.cpp** | ggml-org<br>`github.com/ggml-org/llama.cpp` | MIT | 本地推理服务，OpenAI 兼容接口，默认 `:8080` |
+| **bge-small-zh-v1.5** | 北京智源人工智能研究院 (BAAI) | MIT | 中文嵌入模型；装了才启用语义检索 `:8081` |
+| **AstrBot** | AstrBotDevs<br>`github.com/AstrBotDevs/AstrBot` | AGPL-3.0 | `astrbot_plugins/` 下的对接件跑在它里面 |
+| **Obsidian** | Obsidian.md | 商业软件（个人使用免费） | `[搜笔:][读笔:][日:]` 标记读写其笔记库 |
+
+## 说明
+
+- `ce/` 目录只用 Python 标准库，不含任何第三方源代码。
+- 本仓库不包含上述组件的源码、二进制、模型权重或资源文件；
+  它们由使用者自行安装，按各自许可使用。
+- 分发本项目的修改版时，请保留本文件。
+
+---
+
+*许可原文见 `LICENSE`；`ce/` 目录另有 `ce/LICENSE` 指向同一份 AGPL-3.0。*

@@ -1,0 +1,31 @@
+{
+  "_说明": "示例配置。复制成 config.json 再改。token 留空表示不校验（仅建议本机使用）。",
+  "bind": "127.0.0.1",
+  "port": 8092,
+  "token": "",
+  "llama_url": "http://127.0.0.1:8080/v1/chat/completions",
+  "model": "qwen3",
+  "read_roots": [
+    "/path/to/your/notes",
+    "/path/to/your/papers"
+  ],
+  "mem_write": "",
+  "max_tool_rounds": 3,
+  "max_output_chars": 1500,
+  "semantic": true,
+  "embed_url": "http://127.0.0.1:8081/v1/embeddings",
+  "embed_model": "bge",
+  "semantic_max_chunks": 600,
+  "semantic_min_score": 0.35,
+  "cors_origin": "*",
+  "write_roots": [
+    "/path/to/reports"
+  ],
+  "max_answer_tokens": 1200,
+  "ckpt_dir": "",
+  "log_keep": false,
+  "log_days": 3,
+  "log_dir": "",
+  "disable_thinking": true,
+  "repeat_penalty": 1.1
+}

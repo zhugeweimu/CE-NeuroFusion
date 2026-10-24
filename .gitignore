@@ -1,0 +1,108 @@
+# ---- 第三方项目（绝不入库）----
+Neo-MoFox/
+AstrBot/
+astrbot/
+node_modules/
+.venv/
+venv/
+site-packages/
+
+# ---- 模型权重 ----
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.onnx
+
+# ---- 记忆库数据 ----
+*.db
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+chroma/
+chroma_db/
+mu-memory/
+data/
+
+# ---- 日志 ----
+*.log
+logs/
+run.log
+*.err.log
+*.out.log
+
+# ---- 个人数据（角色卡/对话/日记/立绘）----
+角色卡*.md
+角色卡*.json
+*.json
+!astrbot_plugins/**/metadata.yaml
+世界书*.md
+世界书*.json
+日记/
+会话/
+记忆库/
+幕*.md
+未*.md
+汐*.md
+汐*.json
+*.png
+*.jpg
+*.jpeg
+*.docx
+
+# ---- 密钥 ----
+*.key
+*.pem
+.env
+config/*.toml
+core.toml
+model.toml
+personality.toml
+
+# ---- 缓存 ----
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.uvcache/
+tmp/
+temp/
+
+# ---- 系统 ----
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ---- 备份 ----
+*.bak
+*.bak-*
+*.bak_*
+*备份*
+
+# ---- 本机私有：不进开源仓库（文件保留在磁盘上）----
+ce/config.json
+ce/capacity.json
+ce/.ce_chain.json
+ce/.ce_index.json
+ce/.ce_runs/
+data/
+tools/local/
+__pycache__/
+*.pyc
+*.log
+dist/
+
+代码清单.md
+
+# 个人记录：只留本地
+STATUS.md
+docs/04-*.md
+docs/05-*.md
+docs/06-*.md
+docs/07-*.md
+docs/01-*.md
+
+# 记忆系统：等优化完再单独发布
+astrbot_plugins/memory_neo/
+bridge/

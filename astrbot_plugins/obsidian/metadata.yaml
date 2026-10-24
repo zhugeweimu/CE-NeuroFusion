@@ -1,0 +1,5 @@
+name: astrbot_plugin_obsidian
+desc: 连 Obsidian 笔记库：搜、读、追加、写日记、新建（路径限库内，只追加不覆盖）
+version: 1.0.0
+author: mumu
+repo: ""
