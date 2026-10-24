@@ -27,5 +27,7 @@
   "log_days": 3,
   "log_dir": "",
   "disable_thinking": true,
-  "repeat_penalty": 1.1
+  "repeat_penalty": 1.1,
+  "_记忆联动说明": "留空=不外接。[记:] 需要 mem_write；检索的 memory 档需要 memory_search_url。地址由你填，本项目不自带记忆系统。",
+  "memory_search_url": ""
 }

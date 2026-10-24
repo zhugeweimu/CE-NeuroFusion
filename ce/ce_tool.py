@@ -102,7 +102,7 @@ if CFG.get("auto_roots", True) and not (CFG.get("read_roots") or []):
         READ_ROOTS = _auto
 
 # 只写不读：写入接口给你，检索/查找不归你管（那是外部系统的事）
-MEM_WRITE = CFG.get("mem_write", "http://127.0.0.1:8001/外部检索口/api/memories")
+MEM_WRITE = CFG.get("mem_write", "")   # 留空 = 不外接记忆系统；[记:] 会如实说没接
 MEM_FOLDER = "幕"
 
 MAX_TOOL_ROUNDS = int(CFG.get("max_tool_rounds", 3))
@@ -1095,6 +1095,10 @@ def do_tool(tag, arg):
             f.write(old + block)
         os.replace(tmp, full)
         return "已追加到笔记 %s（现在 %d 字，旧内容没动）。" % (relpath, len(old + block))
+
+    if tag == "记" and not MEM_WRITE:
+        return ("没接记忆系统：config.json 里的 mem_write 是空的。"
+                "填上你的写入地址（形如 http://127.0.0.1:PORT/xxx/api/memories）后重试。")
 
     if tag == "记":
         # 只写，不读、不查、不改。写失败如实说。
