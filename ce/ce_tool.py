@@ -1815,15 +1815,23 @@ def run_mapreduce(task, session_id, source_text=""):
         _save_one(session_id, ch)
         _runlog(session_id, "总账：正文 %d 字 → 分 %d 段；并行 %d 路（%s）" % (
             plan["source_chars"], plan["segments"], plan["parallel"], plan["note"]))
-    segs = _segments(base, SOURCE_CHARS)
+    # 段预算必须扣掉固定开销：system 提示 + 总任务 + 本块要求 + 余量。
+    # 否则"上限 1800"时实际发出去 2500 字，预算形同虚设。
+    _fixed = len(system_prompt()) + len(task) + len(title) + len(detail) + 400
+    _seg_budget = max(600, SOURCE_CHARS - _fixed)
+    segs = _segments(base, _seg_budget)
     if len(segs) > 1:
-        _runlog(session_id, "块「%s」原文 %d 字 → 分 %d 段喂（单请求上限 %d 字）"
-                % (title[:14], len(base), len(segs), SOURCE_CHARS))
+        _runlog(session_id, "块「%s」原文 %d 字 → 分 %d 段喂（段预算 %d = 上限 %d - 固定 %d）"
+                % (title[:14], len(base), len(segs), _seg_budget, SOURCE_CHARS, _fixed))
     seg_out = []
     for si, seg in enumerate(segs):
         tail = ("【这是第 %d/%d 段，只提炼本段与该要求相关的内容】" % (si + 1, len(segs))) \
             if len(segs) > 1 else ""
-        got = (call_model(_part_prompt(task, title, detail, seg + chr(10) + tail),
+        _msgs = _part_prompt(task, title, detail, seg + chr(10) + tail)
+        _runlog(session_id, "块%d/%d 第%d/%d段：上下文 %d 字 / %d 条消息（预算 %d）"
+                % (i + 1, len(ch["steps"]), si + 1, len(segs),
+                   sum(len(m["content"]) for m in _msgs), len(_msgs), SOURCE_CHARS))
+        got = (call_model(_msgs,
                           max_tokens=MAX_ANSWER_TOKENS) or "").strip()
         if got:
             seg_out.append(got)
