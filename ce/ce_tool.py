@@ -117,6 +117,11 @@ REPEAT_PENALTY = float(CFG.get("repeat_penalty", 1.1) or 0)
 RETRY_TIMES = int(CFG.get("retry_times", 1))
 # 单条工具结果进上下文的上限（字）。太大 = 白烧上下文；太小 = 模型看不清。
 TOOL_CTX_CHARS = int(CFG.get("tool_ctx_chars", 1200))
+# 索引上限：文档目录可能几万文件，全扫会让人以为程序卡死
+INDEX_MAX_FILES = int(CFG.get("index_max_files", 3000))
+INDEX_SKIP_DIRS = set(CFG.get("index_skip_dirs", [
+    "node_modules", ".git", "venv", "__pycache__", "AppData", ".venv",
+    "site-packages", "dist", "build", ".cache"]))
 # 分步模式：拆解后一步一提交，步与步之间只传摘要，不把历史全塞进上下文
 STEP_MODE = bool(CFG.get("step_mode", True))
 # 分步的"形状"：
@@ -1729,6 +1734,54 @@ _META_CHARS = set("执行处理完成进行继续开始开展着手按照根据�
 _TAUTOLOGY_WORDS = ("执行步骤", "完成上述", "按步骤", "继续执行", "重复上述", "同上", "见上")
 
 
+_CN_NUM = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
+           "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+
+
+def expect_count(task):
+    """从任务里抽"要几条"。抽不到返回 None。
+
+    只认明确的数量词，宁可不抽也不乱抽 —— 抽错会逼模型凑数。
+    """
+    s = task or ""
+    pats = [
+        r"(\d{1,3})\s*(?:条|个|点|项|类|种|步|名|行)",
+        r"前\s*(\d{1,3})",
+        r"([一二两三四五六七八九十]{1,2})\s*(?:条|个|点|项|类|种|步)",
+    ]
+    for pat in pats:
+        m = re.search(pat, s)
+        if not m:
+            continue
+        g = m.group(1)
+        if g.isdigit():
+            n = int(g)
+        else:
+            n = _CN_NUM.get(g[-1], 0) if g else 0
+        if 2 <= n <= 30:      # 1 条没意义，>30 太容易误判
+            return n
+    return None
+
+
+def count_items(text):
+    """数产出里有几条：优先数列表行/编号行，没有就按首层顿号/分号分句。"""
+    s = (text or "").strip()
+    if not s:
+        return 0
+    lines = [l.strip() for l in s.splitlines() if l.strip()]
+    bullet = [l for l in lines if re.match(r"^(?:[-*·•]\s*|\d{1,2}[.、)]\s*|[（(]\d{1,2}[)）]\s*|##+\s*)", l)]
+    if bullet:
+        return len(bullet)
+    # 没有列表符号：看是否有"1. 2. 3."嵌在行内
+    inline = re.findall(r"(?:^|[。；;\s])(\d{1,2})[.、)]", s)
+    if len(inline) >= 2:
+        return len(set(inline))
+    # 再退一步：单段落里的顿号分句（至少 3 个才算条目）
+    if s.count("、") >= 2 and "\n" not in s:
+        return s.count("、") + 1
+    return len(lines) if len(lines) >= 2 else 1
+
+
 def _wish_hint(task):
     """判断任务是否像"许愿"，返回一句提示（不像就返回空串）。
 
@@ -1979,6 +2032,24 @@ def run_mapreduce(task, session_id, source_text=""):
         if got:
             seg_out.append(got)
     part = "\n\n".join(seg_out).strip()
+
+    # 分步块也要数条数：要求"列 5 条"只给 3 条 → 重写一次，还不行就标出来
+    _need_n = expect_count(task + chr(10) + detail)
+    if _need_n and count_items(part) < _need_n:
+        _got = count_items(part)
+        log("块「%s」条目不足：%d/%d → 要求重写" % (title[:12], _got, _need_n))
+        try:
+            _again = call_model(
+                _part_prompt(task, title,
+                             detail + chr(10) + "必须给出正好 %d 条，每条单独一行以 - 开头。" % _need_n,
+                             base[:SOURCE_CHARS]),
+                max_tokens=MAX_ANSWER_TOKENS) or ""
+            if count_items(_again) >= _got:
+                part = _again.strip()
+        except Exception as e:
+            log("条目重写失败: %r" % (e,))
+        if count_items(part) < _need_n:
+            part = part + "\n\n（注：要求 %d 条，实际 %d 条）" % (_need_n, count_items(part))
 
     ch["parts"].append(part)
     ch["i"] = i + 1
@@ -2277,6 +2348,20 @@ def run_task(task, history=None, session_id="default", force_step=False,
     history = _trim_history(history)
 
     answer = call_model(history, max_tokens=MAX_ANSWER_TOKENS)
+    # 条目数不足：要求"列 N 条"却只给几条 → 明确要求重写一次；还不行就标注。
+    _want_n = expect_count(task)
+    if _want_n and count_items(answer) < _want_n:
+        _got = count_items(answer)
+        log("条目不足：要求 %d 条，产出 %d 条 → 要求重写" % (_want_n, _got))
+        history.append({"role": "assistant", "content": answer})
+        history.append({"role": "user", "content":
+                        "你只给了 %d 条，要求是 %d 条。重写，必须正好 %d 条，"
+                        "每条单独一行、以 - 开头，不要解释。"
+                        % (_got, _want_n, _want_n)})
+        answer = call_model(_trim_history(history), max_tokens=MAX_ANSWER_TOKENS)
+        if count_items(answer) < _want_n:
+            answer = answer.rstrip() + "\n\n（注：要求 %d 条，实际只给出 %d 条）" % (
+                _want_n, count_items(answer))
     history.append({"role": "assistant", "content": answer})
 
     # 工具循环
@@ -2307,8 +2392,23 @@ def run_task(task, history=None, session_id="default", force_step=False,
             except Exception:
                 pass
         history = _trim_history(history)
+        _want_n = expect_count(task)
         answer = call_model(history, max_tokens=MAX_ANSWER_TOKENS)
-        history.append({"role": "assistant", "content": answer})
+        # 条目数不足：明确要求它补齐，重写一次；还不行就标注（不冒充完整）
+        if _want_n and count_items(answer) < _want_n:
+            log("条目不足：要求 %d 条，产出 %d 条 → 要求重写" % (_want_n, count_items(answer)))
+            history.append({"role": "assistant", "content": answer})
+            history.append({"role": "user", "content":
+                            "你只给了 %d 条，要求是 %d 条。重写，必须正好 %d 条，"
+                            "每条单独一行、以 - 开头，不要解释。"
+                            % (count_items(answer), _want_n, _want_n)})
+            answer = call_model(_trim_history(history), max_tokens=MAX_ANSWER_TOKENS)
+            if count_items(answer) < _want_n:
+                answer = answer.rstrip() + "\n\n（注：要求 %d 条，实际只给出 %d 条）" % (
+                    _want_n, count_items(answer))
+            history.append({"role": "assistant", "content": answer})
+        else:
+            history.append({"role": "assistant", "content": answer})
         tools = TOOL_RE.findall(answer)
 
     # 意图强制：任务要求「记/查/读」，代码自己抽参数执行。
