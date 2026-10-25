@@ -22,7 +22,7 @@ DIST = os.path.join(REPO, "dist")
 #   Y（第二位）+1    = 有行为变化 / 新增功能 / 配置项变更（Z 归零）
 #   X                 = 不兼容的大改（目前不动）
 # 发版前必须：bug 已修并验证过，不许边改边发。
-VER = "1.4.9"
+VER = "1.5.0"
 ROOT = "ce-%s" % VER
 
 # 私有痕迹检测词：base64 编码后存，避免这份检测器自己成为明文清单
@@ -55,6 +55,9 @@ CE_ONLY = [
     "docs/14-一次任务怎么走.md",
     "docs/15-自动迭代.md",
     "docs/16-插件接口.md",
+    "docs/17-增量整理插件.md",
+    "plugins/ce_iterate/ce_iterate.py",
+    "plugins/ce_iterate/README.md",
 ]
 
 
